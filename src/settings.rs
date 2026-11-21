@@ -52,7 +52,7 @@ impl Default for Settings {
             shuffle: false,
             repeat: Repeat::Off,
             browser: true,
-            artwork: true,
+            artwork: false,
             sidebar: 210.0,
             resume: None,
         }

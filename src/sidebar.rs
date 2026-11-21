@@ -2,7 +2,7 @@
 //! playlists, with the artwork pane under it. Songs dropped on a playlist join it; a
 //! playlist renames in place on a double-click.
 
-use rune::{Drag, El, Phase, SurfaceFit, Tx, col, el, icon, row, text};
+use rune::{Drag, El, Image, Phase, SurfaceFit, Tx, col, el, icon, row, text};
 use rune_kit::shell::{Sidebar, SidebarRow, SidebarSection};
 use rune_kit::{IconButton, IconButtonVariant, Kit};
 
@@ -82,7 +82,7 @@ fn drop_on_playlist(s: &mut State, id: u64, files: &[std::path::PathBuf]) {
     }
 }
 
-fn artwork(s: &State, k: &Kit, w: f32) -> El {
+fn artwork(s: &State, k: &Kit, w: f32, img: &Image) -> El {
     let caption = match (s.art_track(), s.now) {
         (Some(a), Some(n)) if a == n.track => "Now Playing",
         (Some(_), _) => "Selected Song",
@@ -90,11 +90,7 @@ fn artwork(s: &State, k: &Kit, w: f32) -> El {
     };
     // The pane's padding and the resize grip beside it.
     let side = (w - 21.0).max(60.0);
-    let picture = match &s.art.image {
-        Some(img) => el().key("art-image").size(side, side).radius(4.0).pixels_fit(img.pixels(), SurfaceFit::Fill),
-        None => el().key("art-none").size(side, side).radius(4.0).fill(k.c.layer_02).center()
-            .child(icon(&icons::NOTE, side * 0.3).color(k.c.icon_faint)),
-    };
+    let picture = el().key("art-image").size(side, side).radius(4.0).pixels_fit(img.pixels(), SurfaceFit::Fill);
     col().key("artwork").w_full().px(8.0).pb(8.0).gap(6.0)
         .child(text(caption).font(k.ty.text_xsmall_medium).color(k.c.text_muted))
         .child(picture.border(1.0, k.c.border_weak))
@@ -121,8 +117,9 @@ pub fn view(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
         .on_toggle(|s: &mut State, _| toggle_section(s, "library"))
         .row(source_row(s, k, View::Music, "Music".into(), &icons::NOTE));
     let mut bar = Sidebar::new().label("Sources").section(library).section(playlists);
-    if s.settings.artwork {
-        bar = bar.footer(artwork(s, k, w));
+    // A song without artwork shows no pane, rather than an empty square.
+    if let (true, Some(img)) = (s.settings.artwork, &s.art.image) {
+        bar = bar.footer(artwork(s, k, w, img));
     }
     let list = menus::source_menu(s, k, bar.build(k), layer);
     let grip = el().key("sidebar-grip").w(5.0).h_full().cursor(rune::Cursor::ResizeColumn)
