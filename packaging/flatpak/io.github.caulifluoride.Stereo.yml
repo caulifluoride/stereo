@@ -1,0 +1,32 @@
+# Repackages a built binary: the workflow copies it here as `stereo` first.
+# The library is saved under ~/.var/app/io.github.caulifluoride.Stereo. The sandbox reads the
+# Music folder (and any folder picked through the portal), and plays through PulseAudio or
+# PipeWire's Pulse server; ALSA inside the runtime routes there.
+app-id: io.github.caulifluoride.Stereo
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+command: stereo
+rename-desktop-file: stereo.desktop
+rename-icon: stereo
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-music:ro
+modules:
+  - name: stereo
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 stereo /app/bin/stereo
+      - install -Dm644 stereo.desktop /app/share/applications/stereo.desktop
+      - install -Dm644 stereo.svg /app/share/icons/hicolor/scalable/apps/stereo.svg
+    sources:
+      - type: file
+        path: stereo
+      - type: file
+        path: ../../stereo.desktop
+      - type: file
+        path: ../../assets/stereo.svg

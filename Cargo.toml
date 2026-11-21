@@ -1,0 +1,26 @@
+[package]
+name = "stereo"
+version = "0.1.0"
+edition = "2024"
+license = "0BSD"
+description = "A music player in the spirit of classic iTunes, with Party Shuffle, built with Rune"
+
+[dependencies]
+lofty = "0.25"
+rand = "0.10"
+rodio = { version = "0.23", default-features = false, features = ["playback", "symphonia-all"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
+# Rune patches these crates in its own workspace; Cargo doesn't inherit a dependency's
+# patches, so every app that builds Rune repeats them at the same rev.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }

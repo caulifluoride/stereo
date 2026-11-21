@@ -1,0 +1,34 @@
+# Builds the deb, rpm and Arch packages: VERSION, ARCH (amd64 or arm64) and BIN
+# (the path of the built binary) come from the environment.
+name: stereo
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: "1"
+section: sound
+maintainer: caulifluoride <pablo.322577347@gmail.com>
+description: A music player in the spirit of classic iTunes, with Party Shuffle
+homepage: https://github.com/caulifluoride/stereo
+license: 0BSD
+contents:
+  - src: ${BIN}
+    dst: /usr/bin/stereo
+    file_info: { mode: 0755 }
+  - src: stereo.desktop
+    dst: /usr/share/applications/stereo.desktop
+  - src: LICENSE
+    dst: /usr/share/licenses/stereo/LICENSE
+  - src: assets/stereo.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/stereo.svg
+overrides:
+  deb:
+    depends: [libc6, libasound2 | libasound2t64, libxkbcommon0, libwayland-client0, libvulkan1]
+  rpm:
+    # sonames, so the same package installs on Fedora and openSUSE
+    depends:
+      - libasound.so.2()(64bit)
+      - libxkbcommon.so.0()(64bit)
+      - libwayland-client.so.0()(64bit)
+      - libvulkan.so.1()(64bit)
+  archlinux:
+    depends: [alsa-lib, libxkbcommon, wayland, vulkan-icd-loader]

@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # builds everything without publishing, to try the workflow
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  NFPM_VERSION: "2.49.0"
+
+jobs:
+  binary:
+    name: binary (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          - { target: x86_64-apple-darwin, os: macos-15 }
+          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned toolchain
+        run: echo "RUST_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+
+      - name: Test
+        # The tests cover the library, Party Shuffle, the queue and the lists, none of it platform-specific.
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --target "${{ matrix.target }}"
+
+      - name: Build
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Package
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          fi
+          name="stereo-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            cp "target/${{ matrix.target }}/release/stereo.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/stereo" "dist/$name/"
+          fi
+          if [[ "${{ runner.os }}" == Linux ]]; then
+            cp stereo.desktop assets/stereo.svg "dist/$name/"
+          fi
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          rm -rf "$name"
+          if [[ "${{ runner.os }}" == macOS ]]; then
+            shasum -a 256 "$archive" > "$archive.sha256"
+          else
+            sha256sum "$archive" > "$archive.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: packages (${{ matrix.target }})
+    needs: binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, arch: x86_64, goarch: amd64, nfpm: x86_64 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, arch: aarch64, goarch: arm64, nfpm: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${{ matrix.nfpm }}.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          curl -fsSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage"
+          chmod +x appimagetool
+
+      - name: Unpack the binary
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          tar -xzf "dist/stereo-${version}-${{ matrix.target }}.tar.gz" -C dist
+          echo "BIN=$PWD/dist/stereo-${version}-${{ matrix.target }}/stereo" >> "$GITHUB_ENV"
+
+      - name: deb, rpm and Arch packages
+        env:
+          ARCH: ${{ matrix.goarch }}
+        run: |
+          nfpm package -f packaging/nfpm.yaml -p deb -t "dist/stereo_${VERSION}_${ARCH}.deb"
+          nfpm package -f packaging/nfpm.yaml -p rpm -t "dist/stereo-${VERSION}-1.${{ matrix.arch }}.rpm"
+          nfpm package -f packaging/nfpm.yaml -p archlinux -t "dist/stereo-${VERSION}-1-${{ matrix.arch }}.pkg.tar.zst"
+
+      - name: AppImage
+        run: |
+          appdir="$(mktemp -d)"
+          install -Dm755 "$BIN" "$appdir/usr/bin/stereo"
+          install -Dm644 stereo.desktop "$appdir/stereo.desktop"
+          install -Dm644 assets/stereo.svg "$appdir/stereo.svg"
+          ln -s usr/bin/stereo "$appdir/AppRun"
+          ARCH="${{ matrix.arch }}" ./appimagetool --appimage-extract-and-run "$appdir" \
+            "dist/stereo-${VERSION}-${{ matrix.arch }}.AppImage"
+
+      - name: Flatpak
+        run: |
+          cp "$BIN" packaging/flatpak/stereo
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --force-clean --arch="${{ matrix.arch }}" \
+            --install-deps-from=flathub --repo=flatpak-repo flatpak-build \
+            packaging/flatpak/io.github.caulifluoride.Stereo.yml
+          flatpak build-bundle --arch="${{ matrix.arch }}" flatpak-repo \
+            "dist/stereo-${VERSION}-${{ matrix.arch }}.flatpak" io.github.caulifluoride.Stereo
+
+      - name: Checksums
+        run: |
+          cd dist
+          for f in *.deb *.rpm *.pkg.tar.zst *.AppImage *.flatpak; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: |
+            dist/*.deb*
+            dist/*.rpm*
+            dist/*.pkg.tar.zst*
+            dist/*.AppImage*
+            dist/*.flatpak*
+          if-no-files-found: error
+
+  release:
+    name: publish
+    if: github.ref_type == 'tag'
+    needs: [binary, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
