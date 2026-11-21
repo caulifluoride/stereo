@@ -12,6 +12,11 @@ pub fn window_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.play_pause();
         return true;
     }
+    if m.cmd && m.shift && ev.key == Key::Enter {
+        let ids = s.selected_tracks();
+        s.play_next(&ids);
+        return true;
+    }
     if m.cmd && !m.shift {
         match ev.key {
             Key::Right => s.next(false),
@@ -39,13 +44,14 @@ pub fn window_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 s.table_party.clear_selection();
             }
             View::Playlist(id) => menus::remove_from_playlist(s, id),
-            View::Music => {
+            View::UpNext => menus::remove_from_up_next(s),
+            View::Music | View::Missing | View::Duplicates => {
                 let sel = s.selected_tracks();
                 if !sel.is_empty() {
                     s.dialog = Some(crate::dialogs::Dialog::ConfirmRemove(sel));
                 }
             }
-            View::Smart(_) => return false,
+            View::Smart(_) | View::UserSmart(_) => return false,
         }
         return true;
     }
@@ -68,7 +74,10 @@ fn command(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         'f' => s.search.focused = true,
         'l' => s.reveal_now(tx),
+        'n' if ev.mods.alt => crate::smartedit::open_new(s),
         'n' => sidebar::new_playlist(s, Vec::new()),
+        'i' => crate::info::open(s),
+        ',' => crate::prefs::open(s, crate::prefs::Tab::General),
         'o' => menus::add_folder(s, tx),
         'p' => s.select_view(View::Party),
         'b' => {

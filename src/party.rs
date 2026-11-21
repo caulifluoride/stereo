@@ -3,6 +3,8 @@
 //! playing and a set number of upcoming ones below it. As each song finishes the list moves up
 //! and a new pick joins the bottom, so it never runs out. Songs can be added, played next,
 //! taken out or moved, and "play higher rated songs more often" weights the picks by rating.
+//! Picks can also lean toward songs played less, and keep the same artist from playing twice
+//! in a row.
 //!
 //! Each entry has its own serial, so the same song can be in the list twice and a selection
 //! follows an entry as the list moves.
@@ -13,6 +15,7 @@ use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 
 use crate::library::TrackId;
+use crate::rows::Smart;
 
 /// How many played entries are kept, whatever is shown.
 const HISTORY: usize = 100;
@@ -24,6 +27,9 @@ pub enum Source {
     #[default]
     Library,
     Playlist(u64),
+    Smart(Smart),
+    /// A smart playlist the user made.
+    UserSmart(u64),
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,11 +38,14 @@ pub struct Entry {
     pub track: TrackId,
 }
 
-/// A song the source could give, with its rating (0 to 5 stars, 0 unrated).
-#[derive(Clone, Copy, Debug)]
+/// A song the source could give, with its rating (0 to 5 stars, 0 unrated), its play count
+/// and its artist (as a hash of the folded name, 0 for none).
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Candidate {
     pub id: TrackId,
     pub rating: u8,
+    pub plays: u32,
+    pub artist: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,6 +62,10 @@ pub struct Party {
     pub upcoming_len: usize,
     pub recent_len: usize,
     pub prefer_rated: bool,
+    /// Lean toward songs played fewer times.
+    pub prefer_unplayed: bool,
+    /// Keep the same artist from coming up twice in a row.
+    pub vary_artists: bool,
     pub history: Vec<Entry>,
     pub current: Option<Entry>,
     pub upcoming: Vec<Entry>,
@@ -66,6 +79,8 @@ impl Default for Party {
             upcoming_len: 15,
             recent_len: 5,
             prefer_rated: false,
+            prefer_unplayed: false,
+            vary_artists: false,
             history: Vec::new(),
             current: None,
             upcoming: Vec::new(),
@@ -74,13 +89,26 @@ impl Default for Party {
     }
 }
 
-/// How much more often a rating plays when higher-rated songs are preferred. Unrated songs
-/// count as about three stars, so rating a song one star plays it less than leaving it alone.
-fn weight(rating: u8, prefer_rated: bool) -> f64 {
-    if !prefer_rated {
-        return 1.0;
+/// How the picks lean.
+#[derive(Clone, Copy, Debug, Default)]
+struct Lean {
+    rated: bool,
+    unplayed: bool,
+}
+
+/// How much more often a song plays. Preferring higher-rated songs, unrated ones count as
+/// about three stars, so rating a song one star plays it less than leaving it alone;
+/// preferring songs played less, one never played comes up about four times as often as one
+/// played fifteen times.
+fn weight(c: &Candidate, lean: Lean) -> f64 {
+    let mut w = 1.0;
+    if lean.rated {
+        w *= [4.0, 1.0, 2.0, 4.0, 7.0, 11.0][usize::from(c.rating.min(5))];
     }
-    [4.0, 1.0, 2.0, 4.0, 7.0, 11.0][usize::from(rating.min(5))]
+    if lean.unplayed {
+        w /= (1.0 + f64::from(c.plays)).sqrt();
+    }
+    w
 }
 
 impl Party {
@@ -110,14 +138,19 @@ impl Party {
         if pool.is_empty() {
             return;
         }
+        let lean = Lean { rated: self.prefer_rated, unplayed: self.prefer_unplayed };
+        let artist_of = |id: TrackId| pool.iter().find(|c| c.id == id).map_or(0, |c| c.artist);
         while self.upcoming.len() < self.upcoming_len {
             let recent = (pool.len() / 2).min(self.history.len());
             let mut blocked: HashSet<TrackId> = self.upcoming.iter().chain(self.current.iter()).map(|e| e.track).collect();
             blocked.extend(self.history[self.history.len() - recent..].iter().map(|e| e.track));
             let last = self.upcoming.last().or(self.current.as_ref()).map(|e| e.track);
-            let pick = pick(pool, |c| !blocked.contains(&c.id), self.prefer_rated, rng)
-                .or_else(|| pick(pool, |c| Some(c.id) != last, self.prefer_rated, rng))
-                .or_else(|| pick(pool, |_| true, self.prefer_rated, rng));
+            let last_artist = if self.vary_artists { last.map_or(0, artist_of) } else { 0 };
+            let other_artist = |c: &Candidate| last_artist == 0 || c.artist != last_artist;
+            let pick = pick(pool, |c| !blocked.contains(&c.id) && other_artist(c), lean, rng)
+                .or_else(|| pick(pool, |c| !blocked.contains(&c.id), lean, rng))
+                .or_else(|| pick(pool, |c| Some(c.id) != last, lean, rng))
+                .or_else(|| pick(pool, |_| true, lean, rng));
             let Some(id) = pick else { break };
             let e = self.entry(id);
             self.upcoming.push(e);
@@ -239,8 +272,8 @@ impl Party {
 }
 
 /// One weighted random pick among the candidates `ok` lets through.
-fn pick(pool: &[Candidate], ok: impl Fn(&Candidate) -> bool, prefer_rated: bool, rng: &mut impl Rng) -> Option<TrackId> {
-    let total: f64 = pool.iter().filter(|c| ok(c)).map(|c| weight(c.rating, prefer_rated)).sum();
+fn pick(pool: &[Candidate], ok: impl Fn(&Candidate) -> bool, lean: Lean, rng: &mut impl Rng) -> Option<TrackId> {
+    let total: f64 = pool.iter().filter(|c| ok(c)).map(|c| weight(c, lean)).sum();
     if total <= 0.0 {
         return None;
     }
@@ -248,7 +281,7 @@ fn pick(pool: &[Candidate], ok: impl Fn(&Candidate) -> bool, prefer_rated: bool,
     let mut last = None;
     for c in pool.iter().filter(|c| ok(c)) {
         last = Some(c.id);
-        at -= weight(c.rating, prefer_rated);
+        at -= weight(c, lean);
         if at < 0.0 {
             return Some(c.id);
         }
@@ -266,7 +299,7 @@ mod tests {
     use super::*;
 
     fn pool(n: u64) -> Vec<Candidate> {
-        (1..=n).map(|id| Candidate { id, rating: 0 }).collect()
+        (1..=n).map(|id| Candidate { id, ..Candidate::default() }).collect()
     }
 
     fn tracks(es: &[Entry]) -> Vec<TrackId> {
@@ -334,17 +367,42 @@ mod tests {
     #[test]
     fn higher_rated_songs_play_more_often_when_asked() {
         let mut rng = StdRng::seed_from_u64(5);
-        let pool = vec![Candidate { id: 1, rating: 1 }, Candidate { id: 5, rating: 5 }];
+        let pool = vec![Candidate { id: 1, rating: 1, ..Candidate::default() }, Candidate { id: 5, rating: 5, ..Candidate::default() }];
+        let rated = Lean { rated: true, unplayed: false };
         let mut count: HashMap<TrackId, u32> = HashMap::new();
         for _ in 0..5000 {
-            *count.entry(pick(&pool, |_| true, true, &mut rng).unwrap()).or_default() += 1;
+            *count.entry(pick(&pool, |_| true, rated, &mut rng).unwrap()).or_default() += 1;
         }
         assert!(count[&5] > count[&1] * 6, "{count:?}");
         let mut even: HashMap<TrackId, u32> = HashMap::new();
         for _ in 0..5000 {
-            *even.entry(pick(&pool, |_| true, false, &mut rng).unwrap()).or_default() += 1;
+            *even.entry(pick(&pool, |_| true, Lean::default(), &mut rng).unwrap()).or_default() += 1;
         }
         assert!(even[&1].abs_diff(even[&5]) < 400, "{even:?}");
+    }
+
+    #[test]
+    fn songs_played_less_come_up_more_when_asked() {
+        let mut rng = StdRng::seed_from_u64(10);
+        let pool = vec![Candidate { id: 1, plays: 0, ..Candidate::default() }, Candidate { id: 2, plays: 15, ..Candidate::default() }];
+        let lean = Lean { rated: false, unplayed: true };
+        let mut count: HashMap<TrackId, u32> = HashMap::new();
+        for _ in 0..5000 {
+            *count.entry(pick(&pool, |_| true, lean, &mut rng).unwrap()).or_default() += 1;
+        }
+        assert!(count[&1] > count[&2] * 3, "{count:?}");
+    }
+
+    #[test]
+    fn varied_artists_dont_play_back_to_back() {
+        let mut rng = StdRng::seed_from_u64(11);
+        // Ten artists, ten songs each.
+        let pool: Vec<Candidate> = (1..=100).map(|id| Candidate { id, artist: id % 10 + 1, ..Candidate::default() }).collect();
+        let mut p = Party { vary_artists: true, upcoming_len: 30, ..Party::default() };
+        p.advance(&pool, &mut rng);
+        let mut all = vec![p.current.unwrap().track];
+        all.extend(tracks(&p.upcoming));
+        assert!(all.windows(2).all(|w| w[0] % 10 != w[1] % 10), "{all:?}");
     }
 
     #[test]

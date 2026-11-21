@@ -88,6 +88,11 @@ impl Queue {
         self.current()
     }
 
+    /// What [`Queue::next`] would give for a song playing to its end, without moving on.
+    pub fn peek(&self, repeat: Repeat) -> Option<TrackId> {
+        self.clone().next(repeat, true)
+    }
+
     pub fn prev(&mut self, repeat: Repeat) -> Option<TrackId> {
         if self.order.is_empty() {
             return None;
@@ -129,6 +134,10 @@ mod tests {
         assert_eq!(q.prev(Repeat::Off), Some(1));
         assert_eq!(q.prev(Repeat::Off), Some(1));
         assert_eq!(q.prev(Repeat::All), Some(3));
+        assert_eq!(q.peek(Repeat::Off), None);
+        assert_eq!(q.peek(Repeat::All), Some(1));
+        assert_eq!(q.peek(Repeat::One), Some(3));
+        assert_eq!(q.current(), Some(3));
     }
 
     #[test]

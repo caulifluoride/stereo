@@ -9,6 +9,7 @@ use rune_kit::{Cell, Kit, Table, TableColumn, TableStyle};
 use crate::library::{Track, TrackId};
 use crate::menus::Menu;
 use crate::rows::View;
+use crate::settings::COLUMNS;
 use crate::{State, icons, lcd};
 
 /// Selects row `id` under a right-click (unless it's already part of the selection) and opens
@@ -57,12 +58,32 @@ pub fn rate(s: &mut State, id: TrackId, n: u8) {
     }
 }
 
-/// The speaker beside the song playing.
+/// The speaker beside the song playing, or a warning beside one whose file is gone.
 pub fn now_mark(s: &State, k: &Kit, id: TrackId) -> Cell {
     match s.now.filter(|n| n.track == id) {
         Some(n) => Cell::el(icon(if n.playing { &icons::SPEAKER } else { &icons::SPEAKER_OFF }, 13.0).color(k.c.text_accent)),
+        None if s.missing.contains(&id) => Cell::el(icon(&icons::WARN, 13.0).color(k.c.warning.fg).help("The file is missing")),
         None => Cell::text(""),
     }
+}
+
+/// A Unix time as the day it fell on, `2026-11-21`, in UTC.
+pub fn date(secs: u64) -> String {
+    // Howard Hinnant's days-to-civil.
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y}-{m:02}-{d:02}")
+}
+
+fn num(v: Option<u32>) -> String {
+    v.map(|v| v.to_string()).unwrap_or_default()
 }
 
 fn year(t: &Track) -> String {
@@ -73,25 +94,42 @@ fn plays(t: &Track) -> String {
     if t.plays == 0 { String::new() } else { t.plays.to_string() }
 }
 
+/// The song list's column `id`, as it's laid out.
+fn column(id: &str) -> TableColumn {
+    match id {
+        "pos" => TableColumn::new("pos", "#").width(36.0).align(Align::End).resizable(false),
+        "name" => TableColumn::new("name", "Name").flex(2.2).min(140.0).sortable(),
+        "time" => TableColumn::new("time", "Time").width(58.0).min(48.0).max(90.0).align(Align::End).sortable(),
+        "artist" => TableColumn::new("artist", "Artist").flex(1.4).min(90.0).sortable(),
+        "albumartist" => TableColumn::new("albumartist", "Album Artist").flex(1.2).min(90.0).sortable(),
+        "album" => TableColumn::new("album", "Album").flex(1.4).min(90.0).sortable(),
+        "disc" => TableColumn::new("disc", "Disc").width(46.0).align(Align::End).sortable(),
+        "track" => TableColumn::new("track", "Track").width(52.0).align(Align::End).sortable(),
+        "genre" => TableColumn::new("genre", "Genre").flex(0.8).min(70.0).sortable(),
+        "year" => TableColumn::new("year", "Year").width(60.0).align(Align::End).sortable(),
+        "rating" => TableColumn::new("rating", "Rating").width(92.0).resizable(false).sortable(),
+        "plays" => TableColumn::new("plays", "Plays").width(54.0).align(Align::End).sortable(),
+        "skips" => TableColumn::new("skips", "Skips").width(54.0).align(Align::End).sortable(),
+        "last" => TableColumn::new("last", "Last Played").width(96.0).align(Align::End).sortable(),
+        _ => TableColumn::new("added", "Date Added").width(96.0).align(Align::End).sortable(),
+    }
+}
+
 fn tracks_table(s: &State, k: &Kit) -> El {
-    let style = TableStyle::from_kit(k);
+    let style = TableStyle { row_height: s.settings.density.row_height(), ..TableStyle::from_kit(k) };
     let kit = k.clone();
-    let playlist = matches!(s.view, View::Playlist(_));
+    // The position column means something where the list has an order of its own.
+    let ordered = matches!(s.view, View::Playlist(_) | View::UpNext);
     let mut t = Table::new(|s: &State| &s.table, |s: &mut State| &mut s.table, |s: &State| s.rows.len(), |s: &State, i| Cow::Owned(s.rows[i].to_string()))
         .name("Songs")
+        .style(style)
         .column(TableColumn::new("now", "").width(26.0).resizable(false));
-    if playlist {
-        t = t.column(TableColumn::new("pos", "#").width(36.0).align(Align::End).resizable(false));
+    for (id, _) in COLUMNS {
+        if (*id == "pos" && !ordered) || !s.settings.shows(id) {
+            continue;
+        }
+        t = t.column(column(id));
     }
-    t = t
-        .column(TableColumn::new("name", "Name").flex(2.2).min(140.0).sortable())
-        .column(TableColumn::new("time", "Time").width(58.0).min(48.0).max(90.0).align(Align::End).sortable())
-        .column(TableColumn::new("artist", "Artist").flex(1.4).min(90.0).sortable())
-        .column(TableColumn::new("album", "Album").flex(1.4).min(90.0).sortable())
-        .column(TableColumn::new("genre", "Genre").flex(0.8).min(70.0).sortable())
-        .column(TableColumn::new("year", "Year").width(60.0).align(Align::End).sortable())
-        .column(TableColumn::new("rating", "Rating").width(92.0).resizable(false).sortable())
-        .column(TableColumn::new("plays", "Plays").width(54.0).align(Align::End).sortable());
     t.cell(move |s: &State, i, col| {
         let id = s.rows[i];
         let Some(t) = s.lib.get(id) else { return Cell::text("") };
@@ -105,8 +143,14 @@ fn tracks_table(s: &State, k: &Kit) -> El {
             "artist" => cell_text(&style, &t.artist, base, Align::Start, menu),
             "album" => cell_text(&style, &t.album, base, Align::Start, menu),
             "genre" => cell_text(&style, &t.genre, muted, Align::Start, menu),
+            "albumartist" => cell_text(&style, &t.album_artist, base, Align::Start, menu),
+            "disc" => cell_text(&style, num(t.disc_no), muted, Align::End, menu),
+            "track" => cell_text(&style, num(t.track_no), muted, Align::End, menu),
             "year" => cell_text(&style, year(t), muted, Align::End, menu),
             "plays" => cell_text(&style, plays(t), muted, Align::End, menu),
+            "skips" => cell_text(&style, if t.skips == 0 { String::new() } else { t.skips.to_string() }, muted, Align::End, menu),
+            "last" => cell_text(&style, t.last_played.map(date).unwrap_or_default(), muted, Align::End, menu),
+            "added" => cell_text(&style, if t.added == 0 { String::new() } else { date(t.added) }, muted, Align::End, menu),
             "rating" => Cell::el(stars(&kit, t.rating, move |s: &mut State, n| rate(s, id, n))),
             _ => Cell::text(""),
         }
@@ -197,7 +241,11 @@ fn empty(k: &Kit, s: &State) -> El {
         ),
         View::Playlist(_) if s.search.text.is_empty() => ("This playlist is empty".into(), "Drag songs here, or right-click songs in Music and choose Add to Playlist.".into()),
         View::Smart(_) if s.search.text.is_empty() => ("Nothing here yet".into(), "This list fills itself as you play and rate songs.".into()),
-        _ => ("No matches".into(), format!("Nothing in {} matches “{}”.", s.view.title(&s.lib), s.search.text.trim())),
+        View::UserSmart(_) if s.search.text.is_empty() => ("No songs match".into(), "Right-click it in the sidebar and choose Edit Smart Playlist to change its rules.".into()),
+        View::UpNext if s.search.text.is_empty() => ("Nothing up next".into(), "Right-click songs and choose Play Next or Add to Up Next.".into()),
+        View::Missing if s.search.text.is_empty() => ("No missing files".into(), "Every song's file is where it was.".into()),
+        View::Duplicates if s.search.text.is_empty() => ("No duplicates".into(), "No two songs share a name and an artist.".into()),
+        _ => ("No matches".into(), format!("Nothing in {} matches “{}”.", s.view.title(&s.lib, &s.settings.smart), s.search.text.trim())),
     };
     col().key("empty").w_full().grow(1.0).center().gap(6.0).px(40.0)
         .child(icon(&icons::NOTE, 40.0).color(k.c.icon_faint))
@@ -286,7 +334,9 @@ pub fn status_bar(s: &State, k: &Kit) -> El {
             s.settings.artwork = !s.settings.artwork;
             s.settings_changed();
         }));
-    let right = row().key("status-right").w(220.0).justify_end().center_y()
+    let sleep_tip = if s.sleep.is_some() { "Sleep timer: on" } else { "Sleep timer" };
+    let right = row().key("status-right").w(220.0).justify_end().center_y().gap(2.0)
+        .child(lcd::toggle(k, "sleep", &icons::MOON, s.sleep.is_some(), sleep_tip, |s: &mut State| s.dialog = Some(crate::dialogs::Dialog::Sleep)))
         .child(lcd::toggle(k, "browse", &icons::BROWSER, s.settings.browser, "Show browser (Ctrl+B)", |s: &mut State| {
             s.settings.browser = !s.settings.browser;
             s.settings_changed();
@@ -305,6 +355,13 @@ pub fn status_bar(s: &State, k: &Kit) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_read_as_days() {
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(date(951_782_400), "2000-02-29");
+        assert_eq!(date(1_795_046_400), "2026-11-19");
+    }
 
     #[test]
     fn the_summary_reads_like_itunes() {

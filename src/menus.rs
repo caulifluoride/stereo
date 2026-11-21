@@ -1,5 +1,6 @@
 //! The menus: a right-click on songs, on Party Shuffle's entries or on a playlist in the
-//! sidebar, and the app menu at the top right.
+//! sidebar, and the app menu at the top right. Importing and exporting playlists live here
+//! too.
 
 use std::collections::HashSet;
 
@@ -23,8 +24,10 @@ pub enum Menu {
     Source { at: PointerPress, view: View },
     /// The menu at the top right.
     App,
-    /// One of Party Shuffle's pop-up choices, by key.
-    PartyCount(&'static str),
+    /// One of the pop-up choices (Party Shuffle's, the settings'), by key.
+    Pick(&'static str),
+    /// A pop-up in the smart playlist editor: rule `0`'s field (`1` 0) or comparison (`1` 1).
+    Rule(usize, u8),
 }
 
 impl Menu {
@@ -61,6 +64,17 @@ pub fn wrap(s: &State, k: &Kit, pane: El, layer: &mut Vec<El>) -> El {
                 s.play_row(i);
             }
         }))
+        .item(MenuItem::new("Play Next").on_select(|s: &mut State| {
+            close(s);
+            let ids = s.selected_tracks();
+            s.play_next(&ids);
+        }))
+        .item(MenuItem::new("Add to Up Next").on_select(|s: &mut State| {
+            close(s);
+            let ids = s.selected_tracks();
+            s.add_up_next(&ids);
+        }))
+        .separator()
         .item(MenuItem::new("Play Next in Party Shuffle").on_select(|s: &mut State| {
             close(s);
             let ids = s.selected_tracks();
@@ -89,11 +103,24 @@ pub fn wrap(s: &State, k: &Kit, pane: El, layer: &mut Vec<El>) -> El {
             add_to_playlist(s, id, &ids);
         }));
     }
-    m = m.separator();
+    m = m.separator()
+        .item(MenuItem::new("Get Info").shortcut("Ctrl+I").on_select(|s: &mut State| {
+            close(s);
+            crate::info::open(s);
+        }))
+        .item(MenuItem::new("Show in File Manager").disabled(n != 1).on_select(|s: &mut State| {
+            close(s);
+            show_file(s);
+        }))
+        .separator();
     m = match s.view {
         View::Playlist(id) => m.item(MenuItem::new(format!("Remove {songs} from Playlist")).on_select(move |s: &mut State| {
             close(s);
             remove_from_playlist(s, id);
+        })),
+        View::UpNext => m.item(MenuItem::new(format!("Remove {songs} from Up Next")).on_select(|s: &mut State| {
+            close(s);
+            remove_from_up_next(s);
         })),
         _ => m.item(MenuItem::new(format!("Remove {songs} from Library…")).danger(true).on_select(|s: &mut State| {
             close(s);
@@ -106,6 +133,32 @@ pub fn wrap(s: &State, k: &Kit, pane: El, layer: &mut Vec<El>) -> El {
 /// A context menu's trigger wraps its pane in a row of its own; it fills where the pane did.
 fn fill(trigger: El) -> El {
     trigger.w_full().h_full().min_h(0.0).min_w(0.0)
+}
+
+/// Shows the selected song's file in the file manager.
+pub fn show_file(s: &mut State) {
+    let first = if s.view == View::Party {
+        let sel = partyview::selected(s);
+        s.party_rows.iter().find(|(e, _)| sel.contains(&e.serial)).map(|(e, _)| e.track)
+    } else {
+        s.selected_tracks().first().copied()
+    };
+    let Some(t) = first.and_then(|id| s.lib.get(id)) else { return };
+    if !t.path.exists() {
+        s.notice = Some(format!("“{}” is missing: {} isn't there.", t.title, t.path.display()));
+        return;
+    }
+    if let Err(e) = crate::desktop::show_in_folder(&t.path) {
+        s.notice = Some(format!("Couldn't show the file: {e}"));
+    }
+}
+
+/// Takes the selected rows out of Up Next, by position, so one of two copies can go.
+pub fn remove_from_up_next(s: &mut State) {
+    let sel: HashSet<TrackId> = s.selected_tracks().into_iter().collect();
+    s.up_next.retain(|t| !sel.contains(t));
+    s.table.clear_selection();
+    s.up_next_changed();
 }
 
 pub fn add_to_playlist(s: &mut State, id: u64, ids: &[TrackId]) {
@@ -161,6 +214,15 @@ fn party_menu(s: &State, k: &Kit, pane: El, at: Option<PointerPress>, layer: &mu
             }
         }))
         .separator()
+        .item(MenuItem::new("Get Info").shortcut("Ctrl+I").on_select(|s: &mut State| {
+            close(s);
+            crate::info::open(s);
+        }))
+        .item(MenuItem::new("Show in File Manager").disabled(one.is_none()).on_select(|s: &mut State| {
+            close(s);
+            show_file(s);
+        }))
+        .separator()
         .item(MenuItem::new("Remove from Party Shuffle").shortcut("Delete").on_select(|s: &mut State| {
             close(s);
             let sel = partyview::selected(s);
@@ -191,13 +253,27 @@ pub fn source_menu(s: &State, k: &Kit, list: El, layer: &mut Vec<El>) -> El {
             }
         }
     }));
+    let party_source = match view {
+        Some(View::Playlist(id)) => Some(Source::Playlist(id)),
+        Some(View::Smart(sm)) => Some(Source::Smart(sm)),
+        Some(View::UserSmart(id)) => Some(Source::UserSmart(id)),
+        _ => None,
+    };
+    if let Some(src) = party_source {
+        let used = s.lib.party.source == src;
+        m = m.item(MenuItem::new("Use for Party Shuffle").checked(used).on_select(move |s: &mut State| {
+            close(s);
+            s.party_source(if used { Source::Library } else { src });
+        }));
+    }
+    if let Some(v @ (View::Playlist(_) | View::Smart(_) | View::UserSmart(_))) = view {
+        m = m.item(MenuItem::new("Export Playlist…").on_select_tx(move |s: &mut State, tx: &mut Tx| {
+            close(s);
+            export_playlist(s, v, tx);
+        }));
+    }
     if let Some(View::Playlist(id)) = view {
-        let used = s.lib.party.source == Source::Playlist(id);
         m = m
-            .item(MenuItem::new("Use for Party Shuffle").checked(used).on_select(move |s: &mut State| {
-                close(s);
-                s.party_source(if used { Source::Library } else { Source::Playlist(id) });
-            }))
             .separator()
             .item(MenuItem::new("Rename").on_select(move |s: &mut State| {
                 close(s);
@@ -208,6 +284,25 @@ pub fn source_menu(s: &State, k: &Kit, list: El, layer: &mut Vec<El>) -> El {
                 sidebar::delete_playlist(s, id);
             }));
     }
+    if let Some(View::UserSmart(id)) = view {
+        m = m
+            .separator()
+            .item(MenuItem::new("Edit Smart Playlist…").on_select(move |s: &mut State| {
+                close(s);
+                crate::smartedit::open_edit(s, id);
+            }))
+            .item(MenuItem::new("Delete Playlist").danger(true).on_select(move |s: &mut State| {
+                close(s);
+                sidebar::delete_smart(s, id);
+            }));
+    }
+    if view == Some(View::UpNext) {
+        m = m.item(MenuItem::new("Clear Up Next").on_select(|s: &mut State| {
+            close(s);
+            s.up_next.clear();
+            s.up_next_changed();
+        }));
+    }
     if view == Some(View::Party) {
         m = m.item(MenuItem::new("Refresh").on_select(|s: &mut State| {
             close(s);
@@ -215,6 +310,49 @@ pub fn source_menu(s: &State, k: &Kit, list: El, layer: &mut Vec<El>) -> El {
         }));
     }
     fill(m.on_close(close).build(k, layer))
+}
+
+/// Writes a playlist's songs, in the order they show, to an M3U file the user names.
+pub fn export_playlist(s: &mut State, view: View, tx: &mut Tx) {
+    let ids = crate::rows::source(&s.lib, view, &s.extra());
+    let name = view.title(&s.lib, &s.settings.smart);
+    let text = crate::m3u::write(&s.lib, &ids);
+    let options = FileDialogOptions { title: "Export Playlist".into(), file_name: Some(format!("{name}.m3u8")), ..Default::default() }.filter("Playlists", &["m3u8", "m3u"]);
+    tx.save_file(options, move |s: &mut State, result, _| match result {
+        Ok(Some(path)) => {
+            if let Err(e) = std::fs::write(&path, &text) {
+                s.notice = Some(format!("Couldn't write {}: {e}", path.display()));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => s.notice = Some(format!("Couldn't open the file chooser: {e}")),
+    });
+}
+
+/// Reads an M3U file into a new playlist named after it; songs not yet in the library are
+/// read in and join it.
+pub fn import_playlist(_: &mut State, tx: &mut Tx) {
+    let options = FileDialogOptions { title: "Import Playlist".into(), ..Default::default() }.filter("Playlists", &["m3u8", "m3u"]);
+    tx.open_file(options, |s: &mut State, result, _| match result {
+        Ok(Some(path)) => match std::fs::read(&path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                let files: Vec<_> = crate::m3u::read(&text, path.parent().unwrap_or(std::path::Path::new("/"))).into_iter().filter(|p| crate::library::is_audio(p)).collect();
+                let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty()).unwrap_or_else(|| s.lib.untitled());
+                let id = s.lib.new_playlist(&name, Vec::new());
+                s.changed();
+                let missing = files.iter().filter(|p| !p.exists()).count();
+                s.import_into(id, files.into_iter().filter(|p| p.exists()).collect());
+                if missing > 0 {
+                    s.notice = Some(format!("{missing} songs in “{name}” weren't found."));
+                }
+                s.select_view(View::Playlist(id));
+            }
+            Err(e) => s.notice = Some(format!("Couldn't read {}: {e}", path.display())),
+        },
+        Ok(None) => {}
+        Err(e) => s.notice = Some(format!("Couldn't open the file chooser: {e}")),
+    });
 }
 
 pub fn add_folder(_: &mut State, tx: &mut Tx) {
@@ -252,6 +390,38 @@ pub fn app_menu(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
             close(s);
             sidebar::new_playlist(s, Vec::new());
         }))
+        .item(MenuItem::new("New Smart Playlist…").shortcut("Ctrl+Alt+N").on_select(|s: &mut State| {
+            close(s);
+            crate::smartedit::open_new(s);
+        }))
+        .item(MenuItem::new("Import Playlist…").on_select_tx(|s: &mut State, tx: &mut Tx| {
+            close(s);
+            import_playlist(s, tx);
+        }))
+        .separator()
+        .item(MenuItem::new("Find Missing Files").disabled(s.checking || s.lib.tracks.is_empty()).on_select(|s: &mut State| {
+            close(s);
+            s.find_missing();
+        }))
+        .item(MenuItem::new("Show Duplicates").on_select(|s: &mut State| {
+            close(s);
+            s.select_view(View::Duplicates);
+        }))
+        .item({
+            let i = MenuItem::new("Show Up Next").icon(&icons::UP_NEXT).on_select(|s: &mut State| {
+                close(s);
+                s.select_view(View::UpNext);
+            });
+            if s.up_next.is_empty() { i } else { i.badge(s.up_next.len().to_string()) }
+        })
+        .item(MenuItem::new(match s.sleep_left() {
+            Some(d) => format!("Sleep Timer ({} min)", d.as_secs().div_ceil(60)),
+            None if s.sleep.is_some() => "Sleep Timer (on)".into(),
+            None => "Sleep Timer…".into(),
+        }).icon(&icons::MOON).on_select(|s: &mut State| {
+            close(s);
+            s.dialog = Some(Dialog::Sleep);
+        }))
         .separator()
         .item(MenuItem::new("Show Browser").checked(s.settings.browser).shortcut("Ctrl+B").on_select(|s: &mut State| {
             close(s);
@@ -274,6 +444,10 @@ pub fn app_menu(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
         .item(theme("Light", Theme::Light))
         .item(theme("Dark", Theme::Dark))
         .separator()
+        .item(MenuItem::new("Settings…").icon(&icons::GEAR).shortcut("Ctrl+,").on_select(|s: &mut State| {
+            close(s);
+            crate::prefs::open(s, crate::prefs::Tab::General);
+        }))
         .item(MenuItem::new("Keyboard Shortcuts").on_select(|s: &mut State| {
             close(s);
             s.dialog = Some(Dialog::Shortcuts);

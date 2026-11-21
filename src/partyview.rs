@@ -11,6 +11,8 @@ use rune_kit::{Button, ButtonVariant, Cell, Checkbox, ControlSize, Kit, Select, 
 use crate::lists::{cell_text, now_mark, rate, stars};
 use crate::menus::Menu;
 use crate::party::{Place, RECENT, Source, UPCOMING};
+use crate::rows::Smart;
+use crate::widgets::pick;
 use crate::{State, icons, lcd};
 
 fn party_menu(s: &mut State, serial: u64, at: rune::PointerPress) {
@@ -67,6 +69,7 @@ fn table(s: &State, k: &Kit) -> El {
                 s.play_party(serial);
             }
         })
+        .style(TableStyle { row_height: s.settings.density.row_height(), ..style })
         .build(s, k)
         .grow(1.0)
         .min_h(0.0)
@@ -75,12 +78,12 @@ fn table(s: &State, k: &Kit) -> El {
 fn count_select(s: &State, k: &Kit, layer: &mut Vec<El>, key: &'static str, options: &'static [usize], value: usize, set: fn(&mut State, usize)) -> El {
     let labels: Vec<String> = options.iter().map(|n| n.to_string()).collect();
     let current = value.to_string();
-    let open = s.menu == Some(Menu::PartyCount(key));
+    let open = s.menu == Some(Menu::Pick(key));
     Select::new(key, &labels)
         .label(if key == "recent" { "Recently played songs shown" } else { "Upcoming songs shown" })
         .current(Some(&current))
         .open(open)
-        .on_toggle(move |s: &mut State| s.menu = if s.menu == Some(Menu::PartyCount(key)) { None } else { Some(Menu::PartyCount(key)) })
+        .on_toggle(move |s: &mut State| s.menu = if s.menu == Some(Menu::Pick(key)) { None } else { Some(Menu::Pick(key)) })
         .on_close(|s: &mut State| s.menu = None)
         .width(64.0)
         .on_choose(move |s: &mut State, v: &str, _: &mut Tx| {
@@ -92,32 +95,26 @@ fn count_select(s: &State, k: &Kit, layer: &mut Vec<El>, key: &'static str, opti
         .build(k, layer)
 }
 
+/// Where Party Shuffle can pick from: the library, a smart playlist, or a playlist.
+fn sources(s: &State) -> Vec<(Source, String)> {
+    let mut out = vec![(Source::Library, "Library".to_string())];
+    out.extend(Smart::ALL.iter().map(|&sm| (Source::Smart(sm), sm.name(&s.settings.smart))));
+    out.extend(s.lib.smart.iter().map(|p| (Source::UserSmart(p.id), p.name.clone())));
+    out.extend(s.lib.playlists.iter().map(|p| (Source::Playlist(p.id), p.name.clone())));
+    out
+}
+
 fn source_select(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
-    let mut ids = vec!["library".to_string()];
-    let mut labels = vec!["Library".to_string()];
-    for p in &s.lib.playlists {
-        ids.push(format!("pl{}", p.id));
-        labels.push(p.name.clone());
-    }
-    let current = match s.lib.party.source {
-        Source::Library => "library".to_string(),
-        Source::Playlist(id) => format!("pl{id}"),
-    };
-    let current_label = ids.iter().position(|i| *i == current).map(|i| labels[i].clone()).unwrap_or_else(|| "Library".into());
-    let open = s.menu == Some(Menu::PartyCount("source"));
-    Select::new("party-source", &labels)
-        .label("Party Shuffle source")
-        .current(Some(&current_label))
-        .open(open)
-        .on_toggle(|s: &mut State| s.menu = if s.menu == Some(Menu::PartyCount("source")) { None } else { Some(Menu::PartyCount("source")) })
-        .on_close(|s: &mut State| s.menu = None)
-        .width(180.0)
-        .on_choose(move |s: &mut State, v: &str, _: &mut Tx| {
-            s.menu = None;
-            let src = s.lib.playlists.iter().find(|p| p.name == v).map_or(Source::Library, |p| Source::Playlist(p.id));
+    let all = sources(s);
+    // Names can repeat (a playlist and a smart playlist), so the menu tells them apart.
+    let labels: Vec<String> = all.iter().enumerate().map(|(i, (_, n))| if all[..i].iter().any(|(_, m)| m == n) { format!("{n} ({})", i + 1) } else { n.clone() }).collect();
+    let current = all.iter().position(|(src, _)| *src == s.lib.party.source).unwrap_or(0);
+    let picks: Vec<Source> = all.iter().map(|(src, _)| *src).collect();
+    pick(s, k, layer, "source", "Party Shuffle source", &labels, current, 180.0, move |s, i| {
+        if let Some(&src) = picks.get(i) {
             s.party_source(src);
-        })
-        .build(k, layer)
+        }
+    })
 }
 
 fn controls(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -130,6 +127,15 @@ fn controls(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
             s.lib.party.prefer_rated = !s.lib.party.prefer_rated;
             s.changed();
         }).build(k).key("prefer-rated"));
+    let line3 = row().key("party-leanings").gap(16.0).center_y()
+        .child(Checkbox::new(p.prefer_unplayed).label("Play songs played less more often").on_toggle(|s: &mut State| {
+            s.lib.party.prefer_unplayed = !s.lib.party.prefer_unplayed;
+            s.changed();
+        }).build(k).key("prefer-unplayed"))
+        .child(Checkbox::new(p.vary_artists).label("Don't play the same artist twice in a row").on_toggle(|s: &mut State| {
+            s.lib.party.vary_artists = !s.lib.party.vary_artists;
+            s.changed();
+        }).build(k).key("vary-artists"));
     let line2 = row().key("party-counts").gap(8.0).center_y()
         .child(label("Display:"))
         .child(count_select(s, k, layer, "recent", &RECENT, p.recent_len, |s, n| {
@@ -149,7 +155,7 @@ fn controls(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
     row().key("party-controls").w_full().px(14.0).py(10.0).gap(16.0).center_y()
         .fill(k.c.layer_01)
         .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_weak)
-        .child(col().gap(8.0).child(line1).child(line2))
+        .child(col().gap(8.0).child(line1).child(line3).child(line2))
         .child(spacer())
         .child(refresh)
 }

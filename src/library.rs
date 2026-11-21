@@ -11,6 +11,7 @@ use lofty::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::party::Party;
+use crate::smart::SmartList;
 
 pub type TrackId = u64;
 
@@ -62,6 +63,8 @@ pub struct Playlist {
 pub struct Library {
     pub tracks: Vec<Track>,
     pub playlists: Vec<Playlist>,
+    /// Smart playlists the user made.
+    pub smart: Vec<SmartList>,
     /// Folders scanned before, rescanned on launch for new files.
     pub folders: Vec<PathBuf>,
     pub party: Party,
@@ -81,7 +84,7 @@ impl Library {
     pub fn reindex(&mut self) {
         self.index = self.tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
         self.paths = self.tracks.iter().map(|t| t.path.clone()).collect();
-        let top = self.tracks.iter().map(|t| t.id).chain(self.playlists.iter().map(|p| p.id)).max().unwrap_or(0);
+        let top = self.tracks.iter().map(|t| t.id).chain(self.playlists.iter().map(|p| p.id)).chain(self.smart.iter().map(|p| p.id)).max().unwrap_or(0);
         self.next_id = self.next_id.max(top + 1);
     }
 
@@ -144,14 +147,39 @@ impl Library {
         self.playlists.iter_mut().find(|p| p.id == id)
     }
 
+    pub fn new_smart(&mut self, mut list: SmartList) -> u64 {
+        list.id = self.fresh_id();
+        let id = list.id;
+        self.smart.push(list);
+        id
+    }
+
+    pub fn smart_list(&self, id: u64) -> Option<&SmartList> {
+        self.smart.iter().find(|p| p.id == id)
+    }
+
+    pub fn smart_mut(&mut self, id: u64) -> Option<&mut SmartList> {
+        self.smart.iter_mut().find(|p| p.id == id)
+    }
+
     /// A name no playlist has yet: "untitled playlist", then "untitled playlist 2" and on.
     pub fn untitled(&self) -> String {
-        let taken = |n: &str| self.playlists.iter().any(|p| p.name == n);
-        let base = "untitled playlist";
+        self.untitled_from("untitled playlist")
+    }
+
+    pub fn untitled_from(&self, base: &str) -> String {
+        let taken = |n: &str| self.playlists.iter().any(|p| p.name == n) || self.smart.iter().any(|p| p.name == n);
         if !taken(base) {
             return base.into();
         }
         (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).expect("some number is free")
+    }
+
+    pub fn by_path(&self, p: &Path) -> Option<TrackId> {
+        if !self.paths.contains(p) {
+            return None;
+        }
+        self.tracks.iter().find(|t| t.path == p).map(|t| t.id)
     }
 
     pub fn remember_folder(&mut self, dir: &Path) {
@@ -209,6 +237,98 @@ pub fn read_art(path: &Path) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// Tags to write to a file: each `Some` replaces what's there (an empty string or a zero
+/// clears it), each `None` leaves it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TagEdit {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<u32>,
+    pub track_no: Option<u32>,
+    pub disc_no: Option<u32>,
+    /// New front cover image bytes, or `Some(None)` to take the artwork out.
+    pub cover: Option<Option<Vec<u8>>>,
+}
+
+impl TagEdit {
+    pub fn is_empty(&self) -> bool {
+        *self == TagEdit::default()
+    }
+
+    /// The same changes in the library's copy of a song.
+    pub fn apply(&self, t: &mut Track) {
+        let set = |to: &mut String, v: &Option<String>| {
+            if let Some(v) = v {
+                *to = v.clone();
+            }
+        };
+        set(&mut t.title, &self.title);
+        set(&mut t.artist, &self.artist);
+        set(&mut t.album, &self.album);
+        set(&mut t.album_artist, &self.album_artist);
+        set(&mut t.genre, &self.genre);
+        if let Some(y) = self.year {
+            t.year = (y > 0).then_some(y);
+        }
+        if let Some(n) = self.track_no {
+            t.track_no = (n > 0).then_some(n);
+        }
+        if let Some(n) = self.disc_no {
+            t.disc_no = (n > 0).then_some(n);
+        }
+    }
+}
+
+/// Writes `edit` into the file's main tag, making one if it has none.
+pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{Picture, PictureType};
+    use lofty::tag::Tag;
+    let mut tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
+    if tagged.primary_tag().is_none() {
+        let kind = tagged.primary_tag_type();
+        tagged.insert_tag(Tag::new(kind));
+    }
+    let tag = tagged.primary_tag_mut().ok_or("the file has no tag")?;
+    let text = |tag: &mut Tag, v: &Option<String>, set: fn(&mut Tag, String), clear: fn(&mut Tag)| {
+        match v.as_deref().map(str::trim) {
+            Some("") => clear(tag),
+            Some(v) => set(tag, v.to_string()),
+            None => {}
+        }
+    };
+    text(tag, &edit.title, |t, v| t.set_title(v), |t| t.remove_title());
+    text(tag, &edit.artist, |t, v| t.set_artist(v), |t| t.remove_artist());
+    text(tag, &edit.album, |t, v| t.set_album(v), |t| t.remove_album());
+    text(tag, &edit.genre, |t, v| t.set_genre(v), |t| t.remove_genre());
+    text(tag, &edit.album_artist, |t, v| { t.insert_text(ItemKey::AlbumArtist, v); }, |t| t.remove_key(ItemKey::AlbumArtist));
+    match edit.year {
+        Some(0) => tag.remove_date(),
+        Some(y) => tag.set_date(lofty::tag::items::Timestamp { year: y.min(u32::from(u16::MAX)) as u16, ..Default::default() }),
+        None => {}
+    }
+    match edit.track_no {
+        Some(0) => tag.remove_track(),
+        Some(n) => tag.set_track(n),
+        None => {}
+    }
+    match edit.disc_no {
+        Some(0) => tag.remove_disk(),
+        Some(n) => tag.set_disk(n),
+        None => {}
+    }
+    if let Some(cover) = &edit.cover {
+        tag.remove_picture_type(PictureType::CoverFront);
+        if let Some(bytes) = cover {
+            tag.push_picture(Picture::unchecked(bytes.clone()).pic_type(PictureType::CoverFront).build());
+        }
+    }
+    tagged.save_to_path(path, WriteOptions::default()).map_err(|e| e.to_string())
 }
 
 pub fn is_audio(p: &Path) -> bool {

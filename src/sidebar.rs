@@ -26,6 +26,17 @@ pub fn start_rename(s: &mut State, id: u64) {
     s.renaming = Some(id);
 }
 
+pub fn delete_smart(s: &mut State, id: u64) {
+    s.lib.smart.retain(|p| p.id != id);
+    if s.lib.party.source == crate::party::Source::UserSmart(id) {
+        s.party_source(crate::party::Source::Library);
+    }
+    if s.view == View::UserSmart(id) {
+        s.select_view(View::Music);
+    }
+    s.changed();
+}
+
 pub fn delete_playlist(s: &mut State, id: u64) {
     s.lib.playlists.retain(|p| p.id != id);
     if s.lib.party.source == crate::party::Source::Playlist(id) {
@@ -72,14 +83,20 @@ fn source_row(s: &State, k: &Kit, v: View, label: String, i: &'static rune::Icon
 }
 
 /// Files dropped on a playlist: those already in the library join it now; new ones are
-/// imported and added once read.
+/// imported and added once read. A folder's songs join as they're found.
 fn drop_on_playlist(s: &mut State, id: u64, files: &[std::path::PathBuf]) {
-    let known: Vec<_> = files.iter().filter_map(|f| s.lib.tracks.iter().find(|t| &t.path == f).map(|t| t.id)).collect();
-    menus::add_to_playlist(s, id, &known);
-    let new: Vec<_> = files.iter().filter(|f| !s.lib.contains_path(f)).cloned().collect();
-    if !new.is_empty() {
-        s.import(new);
+    let mut all = Vec::new();
+    for f in files {
+        if f.is_dir() {
+            let mut inside: Vec<_> = walkdir::WalkDir::new(f).follow_links(true).into_iter().filter_map(Result::ok)
+                .filter(|e| e.file_type().is_file() && crate::library::is_audio(e.path())).map(|e| e.into_path()).collect();
+            inside.sort();
+            all.extend(inside);
+        } else {
+            all.push(f.clone());
+        }
     }
+    s.import_into(id, all);
 }
 
 fn artwork(s: &State, k: &Kit, w: f32, img: &Image) -> El {
@@ -107,15 +124,28 @@ pub fn view(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
         )
         .row(source_row(s, k, View::Party, "Party Shuffle".into(), &icons::PARTY));
     for sm in Smart::ALL {
-        playlists = playlists.row(source_row(s, k, View::Smart(sm), sm.name().into(), &icons::GEAR));
+        playlists = playlists.row(source_row(s, k, View::Smart(sm), sm.name(&s.settings.smart), &icons::GEAR));
+    }
+    for p in &s.lib.smart {
+        playlists = playlists.row(source_row(s, k, View::UserSmart(p.id), p.name.clone(), &icons::GEAR));
     }
     for p in &s.lib.playlists {
         playlists = playlists.row(source_row(s, k, View::Playlist(p.id), p.name.clone(), &icons::LIST));
     }
-    let library = SidebarSection::new("Library").key("sec-library")
+    let mut library = SidebarSection::new("Library").key("sec-library")
         .collapsed(s.closed.contains("library"))
         .on_toggle(|s: &mut State, _| toggle_section(s, "library"))
         .row(source_row(s, k, View::Music, "Music".into(), &icons::NOTE));
+    // These show while they have something in them, or while they're the list showing.
+    if !s.up_next.is_empty() || s.view == View::UpNext {
+        library = library.row(source_row(s, k, View::UpNext, format!("Up Next ({})", s.up_next.len()), &icons::UP_NEXT));
+    }
+    if !s.missing.is_empty() || s.view == View::Missing {
+        library = library.row(source_row(s, k, View::Missing, format!("Missing Files ({})", s.missing.len()), &icons::WARN));
+    }
+    if s.view == View::Duplicates {
+        library = library.row(source_row(s, k, View::Duplicates, "Duplicates".into(), &icons::DUPES));
+    }
     let mut bar = Sidebar::new().label("Sources").section(library).section(playlists);
     // A song without artwork shows no pane, rather than an empty square.
     if let (true, Some(img)) = (s.settings.artwork, &s.art.image) {

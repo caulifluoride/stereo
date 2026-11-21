@@ -31,5 +31,10 @@ icons! {
     SPEAKER_OFF "speaker-off" r#"<path d="M1.5 6h2.2L7 3.3v9.4L3.7 10H1.5Z" fill="currentColor"/>"#;
     MENU "menu" r#"<circle cx="3.5" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="12.5" cy="8" r="1.2" fill="currentColor"/>"#;
     REFRESH "refresh" r#"<path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.6h-2.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>"#;
+    MINUS "minus" r#"<path d="M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>"#;
+    WARN "warn" r#"<path d="M8 2.3 14.2 13H1.8Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 6.4v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11.2" r=".8" fill="currentColor"/>"#;
+    UP_NEXT "up-next" r#"<path d="M2.5 4h8M2.5 8h8M2.5 12h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10.5 10.2v3.6l3-1.8Z" fill="currentColor" stroke="currentColor" stroke-width=".8" stroke-linejoin="round"/>"#;
+    MOON "moon" r#"<path d="M12.8 10.2A5.4 5.4 0 0 1 5.8 3.2a5.4 5.4 0 1 0 7 7Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>"#;
+    DUPES "dupes" r#"<rect x="2.5" y="4.5" width="8" height="9" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 2.5h6.8a1.2 1.2 0 0 1 1.2 1.2v7.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#;
     FOLDER "folder" r#"<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.4 1.5h4.8A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>"#;
 }

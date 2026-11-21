@@ -16,7 +16,23 @@ A music player in the spirit of iTunes 4 to 7, Party Shuffle included, drawn wit
 - **Shuffle and repeat** (off, all, one), and the song that was playing comes back, paused,
   next time.
 - **The LCD** shows the song playing with a scrubber; double-click it to jump to the song.
-- **Artwork** of the selected or playing song under the sidebar.
+- **Artwork** of the selected or playing song under the sidebar, looked up on MusicBrainz and
+  the Cover Art Archive for albums without any, if you turn that on.
+- **Smart playlists of your own**: rules on name, artist, genre, rating, plays, skips, time,
+  last played or date added, matched all or any, with a limit ("25 songs by most played").
+  More built in: Never Played, Often Skipped, Forgotten Favourites.
+- **Up Next**: Play Next and Add to Up Next from a right-click, outside Party Shuffle.
+- **Gapless playback, crossfades** (up to 12 seconds), **Sound Check** from ReplayGain tags,
+  and a **ten-band equaliser** with iTunes' presets.
+- **Get Info**: edit tags and artwork for one song or many; changes are written to the files.
+- **Media keys** and the desktop's media controls (MPRIS on Linux), and an optional
+  notification when the song changes.
+- **Scrobbling** to Last.fm and ListenBrainz.
+- **Folders are watched**: new songs join the library by themselves; **Find Missing Files**,
+  **Show Duplicates**, **Show in File Manager**, M3U **import and export**, and a **sleep
+  timer**.
+- **Settings** (Ctrl+,): which columns show, row height, text size, accent colour, how plays
+  and skips count, what happens at launch, and the sizes of the built-in smart playlists.
 
 ## Party Shuffle
 
@@ -26,11 +42,12 @@ A list that never runs out. It shows a few songs that just played (dimmed), the 
 and a set number of upcoming songs picked at random from your library or a playlist. As each
 song finishes the list moves up and a new pick joins the bottom.
 
-- **Source**: the whole library, or any playlist.
 - **Display**: 0 to 50 recently played songs and 5 to 100 upcoming ones.
 - **Play higher rated songs more often** weights the picks by rating (five stars about eleven
   times as often as one; unrated songs count as about three stars).
-- Picks avoid what's already upcoming and what played recently.
+- Picks avoid what's already upcoming and what played recently, and can lean toward songs
+  played less or keep one artist from playing twice in a row.
+- **Source**: the library, any playlist, or any smart playlist.
 - **Play Next** and **Add to Party Shuffle** from a right-click on songs anywhere; move songs
   with Alt+Up and Alt+Down, take them out with Delete, and **Refresh** picks the upcoming
   songs afresh.
