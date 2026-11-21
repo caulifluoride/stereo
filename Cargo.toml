@@ -24,3 +24,8 @@ parley_engine = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb05
 wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "8b877aa2bb055a26a9f53d7021f3afb414b2c6a0" }
+
+# Rune, wgpu and symphonia are unusable unoptimised (scrolling the song list crawls); build
+# them optimised even in dev builds, leaving only this crate quick to rebuild.
+[profile.dev.package."*"]
+opt-level = 3
