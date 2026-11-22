@@ -13,6 +13,9 @@ license: 0BSD
 contents:
   - src: ${BIN}
     dst: /usr/bin/stereo
+    # nFPM only expands env vars in contents when asked to; without this BIN is
+    # treated as a glob and packaging fails with "Glob failed: ${BIN}".
+    expand: true
     file_info: { mode: 0755 }
   - src: stereo.desktop
     dst: /usr/share/applications/stereo.desktop
