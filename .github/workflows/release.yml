@@ -147,10 +147,16 @@ jobs:
 
       - name: AppImage
         run: |
+          # mktemp creates 0700, which appimagetool refuses: the AppImage has to be
+          # readable by whoever runs it. The PNG at the top level is what
+          # appimagetool uses for .DirIcon; an SVG is not accepted for that.
           appdir="$(mktemp -d)"
+          chmod 755 "$appdir"
           install -Dm755 "$BIN" "$appdir/usr/bin/stereo"
           install -Dm644 stereo.desktop "$appdir/stereo.desktop"
-          install -Dm644 assets/stereo.svg "$appdir/stereo.svg"
+          install -Dm644 assets/stereo.png "$appdir/stereo.png"
+          install -Dm644 assets/stereo.png "$appdir/usr/share/icons/hicolor/256x256/apps/stereo.png"
+          install -Dm644 assets/stereo.svg "$appdir/usr/share/icons/hicolor/scalable/apps/stereo.svg"
           ln -s usr/bin/stereo "$appdir/AppRun"
           ARCH="${{ matrix.arch }}" ./appimagetool --appimage-extract-and-run "$appdir" \
             "dist/stereo-${VERSION}-${{ matrix.arch }}.AppImage"
